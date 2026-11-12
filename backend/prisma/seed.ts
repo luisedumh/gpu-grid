@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { hashPassword } from '../src/lib/password.js';
 import { prisma } from '../src/lib/prisma.js';
 
 const sourceCode = `#include <cstdio>
@@ -7,7 +8,18 @@ int main() { hola<<<1, 4>>>(); cudaDeviceSynchronize(); return 0; }
 `;
 const hace = (min: number) => new Date(Date.now() - min * 60_000);
 
+/** One account of each type. All of them use the password "password123". */
+const usuarios = [
+  { name: 'Cliente de prueba', email: 'cliente@gpugrid.dev', role: 'CLIENT' },
+  { name: 'Proveedor de prueba', email: 'proveedor@gpugrid.dev', role: 'PROVIDER' },
+  { name: 'Administrador de prueba', email: 'admin@gpugrid.dev', role: 'ADMIN' },
+] as const;
+
 async function main() {
+  await prisma.user.deleteMany();
+  const passwordHash = await hashPassword('password123');
+  await prisma.user.createMany({ data: usuarios.map((u) => ({ ...u, passwordHash })) });
+
   await prisma.job.deleteMany();
   await prisma.job.createMany({
     data: [
@@ -40,7 +52,7 @@ async function main() {
       { name: 'Convolución 2D', sourceCode, status: 'PENDING' },
     ],
   });
-  console.log('Seed completado: 6 trabajos de ejemplo');
+  console.log('Seed completado: 3 usuarios (uno de cada tipo) y 6 trabajos de ejemplo');
 }
 
 main().finally(() => prisma.$disconnect());
