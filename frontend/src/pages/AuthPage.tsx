@@ -1,9 +1,10 @@
 import { Code2, Cpu, Loader2 } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
-import * as authApi from '../api/auth.ts';
-import { ApiError } from '../api/http.ts';
+import { Link, Navigate, useLocation } from 'react-router';
+import { homePathFor } from '../auth/roles.ts';
 import { BrandMark } from '../components/BrandMark.tsx';
+import { login, register } from '../store/authSlice.ts';
+import { useAppDispatch, useAppSelector } from '../store/hooks.ts';
 
 type Mode = 'login' | 'register';
 type AccountType = 'CLIENT' | 'PROVIDER';
@@ -24,7 +25,10 @@ function validate(mode: Mode, name: string, email: string, password: string): Fi
 
 /** Login and sign-up screen, as in the mockups. */
 export function AuthPage({ mode }: { mode: Mode }) {
-  const navigate = useNavigate();
+  const dispatch = useAppDispatch();
+  const user = useAppSelector((state) => state.auth.user);
+  const location = useLocation();
+  const from = (location.state as { from?: string } | null)?.from;
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,6 +36,9 @@ export function AuthPage({ mode }: { mode: Mode }) {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Logged in (already, or just now): go where they were heading, or to their home page
+  if (user) return <Navigate to={from ?? homePathFor(user.role)} replace />;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -42,22 +49,21 @@ export function AuthPage({ mode }: { mode: Mode }) {
     if (Object.keys(errors).length > 0) return;
 
     setSubmitting(true);
-    try {
-      if (mode === 'login') await authApi.login(email, password);
-      else await authApi.register({ name, email, password, role });
-      // The session is kept in Redux in SCRUM-21; for now, go to the app
-      navigate('/jobs');
-    } catch (err) {
-      if (err instanceof ApiError && err.details.length > 0) {
+    // Dispatch the action; once the user is in the store, the redirect above takes over
+    const result =
+      mode === 'login'
+        ? await dispatch(login({ email, password }))
+        : await dispatch(register({ name, email, password, role }));
+    setSubmitting(false);
+
+    if (login.rejected.match(result) || register.rejected.match(result)) {
+      const problem = result.payload;
+      if (problem && Object.keys(problem.fields).length > 0) {
         // Errors per field returned by the backend validation (Zod)
-        setFieldErrors(
-          Object.fromEntries(err.details.map((d) => [d.field, d.message])) as FieldErrors,
-        );
+        setFieldErrors(problem.fields as FieldErrors);
       } else {
-        setError((err as Error).message);
+        setError(problem?.message ?? 'Something went wrong');
       }
-    } finally {
-      setSubmitting(false);
     }
   }
 
