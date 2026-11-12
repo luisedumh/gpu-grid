@@ -15,6 +15,11 @@ if (!config.agentToken) {
 
 const scheduler = new Scheduler();
 
+if (!config.jwtSecret) {
+  console.error('JWT_SECRET is not set. Add it to backend/.env (see .env.example).');
+  process.exit(1);
+}
+
 const compiler = createDockerCompiler({
   image: config.compilerImage,
   timeoutMs: config.compileTimeoutMs,

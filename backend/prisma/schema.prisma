@@ -51,3 +51,20 @@ model Job {
   @@index([status])
   @@index([createdAt])
 }
+
+/// Kinds of account. Administrators cannot sign up from the web.
+enum Role {
+  CLIENT   // submits jobs
+  PROVIDER // offers GPU machines
+  ADMIN    // sees and manages everything
+}
+
+/// A person with an account on the platform.
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(CLIENT)
+  createdAt    DateTime @default(now())
+}

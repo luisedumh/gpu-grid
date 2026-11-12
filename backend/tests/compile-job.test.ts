@@ -95,7 +95,10 @@ describe('recoverPendingJobs', () => {
   it('returns interrupted and pending jobs, oldest first', async () => {
     const first = await createPendingJob();
     const second = await createPendingJob();
-    await prisma.job.update({ where: { id: first.id }, data: { status: 'COMPILING' } });
+    await prisma.job.update({
+      where: { id: first.id },
+      data: { status: 'COMPILING', createdAt: new Date(Date.now() - 60_000) },
+    });
     const done = await createPendingJob();
     await prisma.job.update({ where: { id: done.id }, data: { status: 'QUEUED' } });
 
