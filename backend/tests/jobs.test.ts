@@ -105,14 +105,54 @@ describe('GET /api/jobs/:id', () => {
 });
 
 describe('GET /api/jobs', () => {
-  it('lists the jobs, newest first', async () => {
-    await client.post('/api/jobs').send({ ...validJob, name: 'First' });
-    await client.post('/api/jobs').send({ ...validJob, name: 'Second' });
+  /** Three jobs created a few milliseconds apart; the second one is COMPLETED. */
+  async function createJobs() {
+    for (const name of ['first', 'second', 'third']) {
+      await prisma.job.create({ data: { name, sourceCode: 'int main() {}' } });
+      // Distinct timestamps, so the order is deterministic
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await prisma.job.updateMany({ where: { name: 'second' }, data: { status: 'COMPLETED' } });
+  }
+
+  it('lists jobs newest first, without their code or outputs', async () => {
+    await createJobs();
 
     const response = await client.get('/api/jobs');
 
     expect(response.status).toBe(200);
-    expect(response.body.map((job: { name: string }) => job.name)).toEqual(['Second', 'First']);
+    expect(response.body.jobs.map((job: { name: string }) => job.name)).toEqual([
+      'third',
+      'second',
+      'first',
+    ]);
+    expect(response.body.jobs[0]).not.toHaveProperty('stdout');
+    expect(response.body.jobs[0]).not.toHaveProperty('sourceCode');
+  });
+
+  it('counts jobs in every status', async () => {
+    await createJobs();
+
+    const response = await client.get('/api/jobs');
+
+    expect(response.body.counts).toMatchObject({ PENDING: 2, COMPLETED: 1, FAILED: 0 });
+  });
+
+  it('filters by status and limits the number of results', async () => {
+    await createJobs();
+
+    const filtered = await client.get('/api/jobs?status=COMPLETED');
+    const limited = await client.get('/api/jobs?limit=2');
+
+    expect(filtered.body.jobs.map((job: { name: string }) => job.name)).toEqual(['second']);
+    expect(limited.body.jobs).toHaveLength(2);
+  });
+
+  it('rejects an unknown status', async () => {
+    const response = await client.get('/api/jobs?status=EXPLODED');
+
+    expect(response.status).toBe(400);
+    expect(response.body.details[0].field).toBe('status');
   });
 });
 

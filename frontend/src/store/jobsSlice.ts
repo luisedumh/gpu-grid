@@ -14,7 +14,9 @@ const initialState: JobsState = { items: [], status: 'idle', error: null };
 export const fetchJobs = createAsyncThunk('jobs/fetchJobs', async () => {
   const response = await fetch('/api/jobs');
   if (!response.ok) throw new Error(`Request failed (${response.status})`);
-  return (await response.json()) as Job[];
+  // The API answers { jobs, counts }; the page only needs the list
+  const data = (await response.json()) as { jobs: Job[] };
+  return data.jobs;
 });
 
 /** Reducer: computes the new state for each step of the request. */

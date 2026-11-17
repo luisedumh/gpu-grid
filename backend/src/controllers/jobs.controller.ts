@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { createJobSchema } from '../schemas/jobs.schema.js';
+import { createJobSchema, listJobsQuerySchema } from '../schemas/jobs.schema.js';
 import * as jobsService from '../services/jobs.service.js';
 
 /** What the jobs API needs from the rest of the system. */
@@ -18,9 +18,10 @@ export function createJobsController(deps: JobsDeps) {
       res.status(201).location(`/api/jobs/${job.id}`).json(job);
     },
 
-    /** GET /api/jobs — lists all jobs, newest first. */
-    async list(_req: Request, res: Response) {
-      res.json(await jobsService.listJobs());
+    /** GET /api/jobs — lists jobs, newest first, with optional ?status= and ?limit= */
+    async list(req: Request, res: Response) {
+      const query = listJobsQuerySchema.parse(req.query);
+      res.json(await jobsService.listJobs(query));
     },
 
     /** GET /api/jobs/:id — returns the current state of a job. */
