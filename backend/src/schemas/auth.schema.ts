@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
-const email = z.email().trim().toLowerCase().max(254);
+// Spaces and capitals are removed BEFORE checking the format, so " Ana@Mail.com " is valid
+// and is stored as "ana@mail.com" (z.email().trim() would check the format first and reject it)
+const email = z.string().trim().toLowerCase().max(254).pipe(z.email());
 const password = z.string().min(8, 'Use at least 8 characters').max(128);
 
 /** Body of POST /api/auth/register. Admin accounts cannot be self-registered. */

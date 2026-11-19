@@ -14,7 +14,8 @@
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
     "test:docker": "DOCKER_TESTS=1 vitest run tests/docker-compiler.test.ts",
-    "make-admin": "tsx src/scripts/make-admin.ts"
+    "make-admin": "tsx src/scripts/make-admin.ts",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",
@@ -38,6 +39,7 @@
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.2",
+    "@vitest/coverage-v8": "^5.0.5",
     "eslint": "^10.13.0",
     "prisma": "^7.10.1",
     "supertest": "^7.3.1",

@@ -10,5 +10,13 @@ export default defineConfig({
     globalSetup: ['tests/global-setup.ts'],
     // Test files share one database, so they must not run at the same time
     fileParallelism: false,
+    // npm run test:coverage: which lines of src/ the tests run (report in coverage/index.html)
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.ts'],
+      // Generated code, the start-up script and command-line scripts are not unit-tested
+      exclude: ['src/generated/**', 'src/server.ts', 'src/scripts/**', 'src/types/**'],
+      reporter: ['text', 'html'],
+    },
   },
 });
