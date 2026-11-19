@@ -27,14 +27,12 @@ export interface RunResult {
 const MAX_OUTPUT_CHARS = 1_000_000;
 
 /**
- * Runs a compiled CUDA binary inside a short-lived Docker container with GPU access,
+ * Arguments for `docker run`: a short-lived container with GPU access,
  * no network, a read-only mount and resource limits.
+ * Kept apart from runBinary so the tests can check them without Docker.
  */
-export function runBinary(options: RunOptions): Promise<RunResult> {
-  const containerName = `gpugrid-job-${randomUUID()}`;
-  const user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
-
-  const args = [
+export function dockerRunArgs(options: RunOptions, containerName: string, user: string): string[] {
+  return [
     'run',
     '--rm',
     '--name',
@@ -54,6 +52,13 @@ export function runBinary(options: RunOptions): Promise<RunResult> {
     options.image ?? 'ubuntu:24.04',
     `/work/${options.binaryName}`,
   ];
+}
+
+/** Runs a compiled CUDA binary inside a Docker container (see dockerRunArgs). */
+export function runBinary(options: RunOptions): Promise<RunResult> {
+  const containerName = `gpugrid-job-${randomUUID()}`;
+  const user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+  const args = dockerRunArgs(options, containerName, user);
 
   return new Promise((resolve, reject) => {
     const start = performance.now();
