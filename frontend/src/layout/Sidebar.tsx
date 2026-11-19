@@ -1,5 +1,5 @@
 import { Code2, Cpu, ListChecks, LogOut, UserRound, type LucideIcon } from 'lucide-react';
-import { NavLink, useNavigate } from 'react-router';
+import { NavLink, useLocation, useNavigate } from 'react-router';
 import type { Role } from '../api/auth.ts';
 import { ROLE_LABELS } from '../auth/roles.ts';
 import { BackendStatus } from '../components/BackendStatus.tsx';
@@ -27,6 +27,11 @@ export function Sidebar() {
   const user = useAppSelector((state) => state.auth.user);
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+
+  /** My jobs stays highlighted on /jobs/<id> (job detail), but not on /jobs/new. */
+  const isItemActive = (to: string, isActive: boolean) =>
+    to === '/jobs' ? pathname === '/jobs' || /^\/jobs\/(?!new$)/.test(pathname) : isActive;
 
   async function handleLogout() {
     await dispatch(logout());
@@ -50,7 +55,9 @@ export function Sidebar() {
             end
             className={({ isActive }) =>
               `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                isActive ? 'bg-white/10 text-white' : 'hover:bg-white/5 hover:text-white'
+                isItemActive(to, isActive)
+                  ? 'bg-white/10 text-white'
+                  : 'hover:bg-white/5 hover:text-white'
               }`
             }
           >
