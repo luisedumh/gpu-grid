@@ -11,8 +11,10 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@reduxjs/toolkit": "^2.14.0",
     "lucide-react": "^1.66.0",
+    "monaco-editor": "^0.57.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-redux": "^9.3.1",
