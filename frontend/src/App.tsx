@@ -56,6 +56,7 @@ export default function App() {
           }
         />
         <Route path="jobs" element={<JobsPage />} />
+        <Route path="jobs/:jobId" element={<JobsPage />} />
         <Route
           path="providers"
           element={

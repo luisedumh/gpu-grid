@@ -38,6 +38,31 @@ export interface Job {
   finishedAt: string | null;
 }
 
+/** Lighter version of a job returned by the list endpoint (no code or outputs). */
+export type JobSummary = Pick<
+  Job,
+  'id' | 'name' | 'status' | 'exitCode' | 'durationMs' | 'attempts' | 'createdAt' | 'finishedAt'
+>;
+
+/** Answer of GET /api/jobs. */
+export interface JobList {
+  jobs: JobSummary[];
+  /** Number of jobs in each status, over all jobs (not only the ones listed). */
+  counts: Record<JobStatus, number>;
+}
+
+/** Every status, in the order a job goes through them. */
+export const JOB_STATUSES: readonly JobStatus[] = [
+  'PENDING',
+  'COMPILING',
+  'COMPILE_FAILED',
+  'QUEUED',
+  'RUNNING',
+  'COMPLETED',
+  'FAILED',
+  'TIMED_OUT',
+];
+
 export interface NewJob {
   name: string;
   sourceCode: string;
