@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { prisma } from '../src/lib/prisma.js';
-import { loggedIn, resetDatabase } from './helpers.js';
+import { createJob, loggedIn, resetDatabase } from './helpers.js';
 
 const app = createApp();
 
@@ -108,7 +108,7 @@ describe('GET /api/jobs', () => {
   /** Three jobs created a few milliseconds apart; the second one is COMPLETED. */
   async function createJobs() {
     for (const name of ['first', 'second', 'third']) {
-      await prisma.job.create({ data: { name, sourceCode: 'int main() {}' } });
+      await createJob({ name, sourceCode: 'int main() {}', clientId: client.user.id });
       // Distinct timestamps, so the order is deterministic
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -153,6 +153,54 @@ describe('GET /api/jobs', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.details[0].field).toBe('status');
+  });
+});
+
+describe('jobs belong to their client', () => {
+  it('stores who submitted each job', async () => {
+    const response = await client.post('/api/jobs').send(validJob);
+
+    const stored = await prisma.job.findUnique({ where: { id: response.body.id } });
+    expect(stored?.clientId).toBe(client.user.id);
+  });
+
+  it('lists and counts only the jobs of the client', async () => {
+    await createJob({ name: 'mine', sourceCode: 'x', clientId: client.user.id });
+    await createJob({ name: 'theirs', sourceCode: 'x', status: 'COMPLETED' });
+
+    const response = await client.get('/api/jobs');
+
+    expect(response.body.jobs.map((job: { name: string }) => job.name)).toEqual(['mine']);
+    expect(response.body.counts).toMatchObject({ PENDING: 1, COMPLETED: 0 });
+  });
+
+  it("answers 404 for someone else's job, without revealing that it exists", async () => {
+    const theirs = await createJob({ name: 'theirs', sourceCode: 'x' });
+
+    const response = await client.get(`/api/jobs/${theirs.id}`);
+
+    expect(response.status).toBe(404);
+  });
+
+  it('lets administrators see every job', async () => {
+    const admin = await loggedIn(app, 'ADMIN');
+    const theirs = await createJob({ name: 'theirs', sourceCode: 'x' });
+    await createJob({ name: 'mine', sourceCode: 'x', clientId: client.user.id });
+
+    const list = await admin.get('/api/jobs');
+    const one = await admin.get(`/api/jobs/${theirs.id}`);
+
+    expect(list.body.jobs).toHaveLength(2);
+    expect(one.status).toBe(200);
+  });
+
+  it('shows no client jobs to providers', async () => {
+    const provider = await loggedIn(app, 'PROVIDER');
+    await createJob({ name: 'theirs', sourceCode: 'x' });
+
+    const response = await provider.get('/api/jobs');
+
+    expect(response.body.jobs).toEqual([]);
   });
 });
 

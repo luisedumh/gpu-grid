@@ -32,6 +32,10 @@ model Job {
   status         JobStatus @default(PENDING)
   timeoutSeconds Int       @default(60)
 
+  // Owner: the client who submitted it (if the account is deleted, so are its jobs)
+  clientId String
+  client   User   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
   // Compilation
   compilerOutput String?
   binaryPath     String?
@@ -50,6 +54,7 @@ model Job {
 
   @@index([status])
   @@index([createdAt])
+  @@index([clientId, createdAt])
 }
 
 /// Kinds of account. Administrators cannot sign up from the web.
@@ -67,4 +72,7 @@ model User {
   passwordHash String
   role         Role     @default(CLIENT)
   createdAt    DateTime @default(now())
+
+  /// Jobs this user has submitted
+  jobs Job[]
 }
