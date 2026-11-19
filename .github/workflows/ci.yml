@@ -75,7 +75,7 @@ jobs:
       DATABASE_URL: postgresql://gpugrid:gpugrid@localhost:5432/gpugrid_test?schema=public
 
   agent:
-    name: Agent (lint, typecheck)
+    name: Agent (lint, typecheck, test)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -99,6 +99,9 @@ jobs:
 
       - name: Type check
         run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
 
   frontend:
     name: Frontend (lint, typecheck, build)
