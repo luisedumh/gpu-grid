@@ -10,6 +10,7 @@ import type { ServerMessage } from '../src/agents/protocol.js';
 import { Scheduler } from '../src/agents/scheduler.js';
 import { createApp } from '../src/app.js';
 import { prisma } from '../src/lib/prisma.js';
+import { createJob } from './helpers.js';
 import { MAX_ATTEMPTS } from '../src/services/execution.service.js';
 
 const TOKEN = 'test-agent-token';
@@ -46,7 +47,7 @@ afterAll(async () => {
 
 /** Creates a compiled job, as if the compiler had just finished. */
 async function createQueuedJob(name = 'Job') {
-  const job = await prisma.job.create({ data: { name, sourceCode: 'int main() {}' } });
+  const job = await createJob({ name, sourceCode: 'int main() {}' });
   const binaryPath = path.join(jobsDir, `${job.id}-program`);
   await writeFile(binaryPath, 'fake binary');
   return prisma.job.update({ where: { id: job.id }, data: { status: 'QUEUED', binaryPath } });
@@ -176,9 +177,7 @@ describe('job execution', () => {
     const job = await createQueuedJob();
     const agent = await connectAgent();
     await waitFor(() => scheduler.listAgents().length === 1);
-    const other = await prisma.job.create({
-      data: { name: 'other', sourceCode: 'x', status: 'RUNNING' },
-    });
+    const other = await createJob({ name: 'other', sourceCode: 'x', status: 'RUNNING' });
 
     agent.ws.send(
       JSON.stringify({

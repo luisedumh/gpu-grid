@@ -20,6 +20,8 @@ async function main() {
   const passwordHash = await hashPassword('password123');
   await prisma.user.createMany({ data: usuarios.map((u) => ({ ...u, passwordHash })) });
 
+  // The example jobs belong to the test client
+  const cliente = await prisma.user.findUniqueOrThrow({ where: { email: 'cliente@gpugrid.dev' } });
   await prisma.job.deleteMany();
   await prisma.job.createMany({
     data: [
@@ -50,9 +52,9 @@ async function main() {
         finishedAt: hace(59),
       },
       { name: 'Convolución 2D', sourceCode, status: 'PENDING' },
-    ],
+    ].map((job) => ({ ...job, clientId: cliente.id })),
   });
-  console.log('Seed completado: 3 usuarios (uno de cada tipo) y 6 trabajos de ejemplo');
+  console.log('Seed completado: 3 usuarios (uno de cada tipo) y 6 trabajos de ejemplo del cliente');
 }
 
 main().finally(() => prisma.$disconnect());

@@ -1,7 +1,7 @@
 import type { Express } from 'express';
 import request from 'supertest';
 import { createSessionToken, SESSION_COOKIE } from '../src/auth/session.js';
-import type { Role } from '../src/generated/prisma/enums.js';
+import type { JobStatus, Role } from '../src/generated/prisma/enums.js';
 import { prisma } from '../src/lib/prisma.js';
 
 let counter = 0;
@@ -41,4 +41,15 @@ export async function loggedIn(app: Express, role: Role = 'CLIENT') {
 /** Removes all users, and with them all their jobs. */
 export function resetDatabase() {
   return prisma.$transaction([prisma.job.deleteMany(), prisma.user.deleteMany()]);
+}
+
+/** Creates a job directly in the database. Unless a client is given, it belongs to a new one. */
+export async function createJob(data: {
+  name: string;
+  sourceCode: string;
+  status?: JobStatus;
+  clientId?: string;
+}) {
+  const clientId = data.clientId ?? (await createUser('CLIENT')).id;
+  return prisma.job.create({ data: { ...data, clientId } });
 }
