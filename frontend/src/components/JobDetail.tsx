@@ -1,7 +1,7 @@
-import { Loader2, X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { ChevronDown, ChevronRight, FileCode2, Loader2, X } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { FINAL_STATUSES } from '../api/jobs.ts';
+import { FINAL_STATUSES, type ProjectFile } from '../api/jobs.ts';
 import { useJob } from '../hooks/useJob.ts';
 import { formatDateTime, formatDuration } from '../lib/format.ts';
 import { JobStatusBadge } from './JobStatusBadge.tsx';
@@ -60,6 +60,21 @@ export function JobDetail({ jobId }: { jobId: string }) {
           <Info label="Attempts" value={job.attempts} />
         </dl>
 
+        {job.kind === 'DOCKER' && (
+          <dl className="space-y-2">
+            <Info
+              label="Docker image"
+              value={<Mono>{job.image ?? `${job.imageArchiveName} (uploaded)`}</Mono>}
+            />
+            <Info
+              label="Command"
+              value={<Mono>{job.command ?? 'Default command of the image'}</Mono>}
+            />
+          </dl>
+        )}
+
+        {job.files && job.files.length > 0 && <JobFiles files={job.files} />}
+
         {job.compilerOutput && (
           <Output
             title="Compiler output"
@@ -115,4 +130,45 @@ function Output({
       </pre>
     </section>
   );
+}
+
+/** Files of the project that was sent; each one can be opened to read its code. */
+function JobFiles({ files }: { files: ProjectFile[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
+
+  return (
+    <section>
+      <h3 className="mb-1.5 text-xs font-semibold text-slate-600">Files ({files.length})</h3>
+      <ul className="overflow-hidden rounded-lg border border-slate-200">
+        {sorted.map((file) => (
+          <li key={file.path} className="border-b border-slate-100 last:border-0">
+            <button
+              type="button"
+              onClick={() => setOpen(open === file.path ? null : file.path)}
+              aria-expanded={open === file.path}
+              className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-mono text-xs hover:bg-slate-50"
+            >
+              {open === file.path ? (
+                <ChevronDown className="size-3.5 text-slate-400" />
+              ) : (
+                <ChevronRight className="size-3.5 text-slate-400" />
+              )}
+              <FileCode2 className="size-3.5 text-brand-500" />
+              {file.path}
+            </button>
+            {open === file.path && (
+              <pre className="max-h-64 overflow-auto bg-slate-950 p-3 font-mono text-xs leading-relaxed whitespace-pre text-slate-200">
+                {file.content}
+              </pre>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Mono({ children }: { children: ReactNode }) {
+  return <span className="font-mono text-xs break-all">{children}</span>;
 }

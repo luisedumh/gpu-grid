@@ -52,16 +52,35 @@ function ConsoleLines({ job }: { job: Job }) {
           {'\n'}
         </span>
       )}
+      {job.kind === 'DOCKER' && (
+        <span className="text-slate-500">
+          $ docker run {job.image ?? job.imageArchiveName} {job.command ?? ''}
+          {'\n'}
+        </span>
+      )}
       {job.status === 'PENDING' && (
-        <span className="text-slate-500">Waiting to compile…{'\n'}</span>
+        <span className="text-slate-500">
+          {job.kind === 'DOCKER' ? 'Received.' : 'Waiting to compile…'}
+          {'\n'}
+        </span>
       )}
       {job.status === 'COMPILING' && (
         <span className="text-slate-500">Compiling with nvcc…{'\n'}</span>
       )}
       {job.status === 'QUEUED' && (
-        <span className="text-slate-500">Compiled. Waiting for a free GPU…{'\n'}</span>
+        <span className="text-slate-500">
+          {job.kind === 'DOCKER' ? 'Waiting for a free GPU…' : 'Compiled. Waiting for a free GPU…'}
+          {'\n'}
+        </span>
       )}
-      {job.status === 'RUNNING' && <span className="text-slate-500">Running on a GPU…{'\n'}</span>}
+      {job.status === 'RUNNING' && (
+        <span className="text-slate-500">
+          {job.kind === 'DOCKER'
+            ? 'Loading the image and running it on a GPU…'
+            : 'Running on a GPU…'}
+          {'\n'}
+        </span>
+      )}
       {job.stdout}
       {job.stderr && <span className="text-red-400">{job.stderr}</span>}
     </>

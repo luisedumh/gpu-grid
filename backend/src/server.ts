@@ -40,6 +40,8 @@ if (pending.length > 0) console.log(`Recovered ${pending.length} pending job(s)`
 
 const app = createApp({
   onJobCreated: (jobId) => compileQueue.add(jobId),
+  // Docker jobs are not compiled: they can go to a free agent right away
+  onJobQueued: () => void scheduler.dispatch(),
   agentToken: config.agentToken,
   listAgents: () => scheduler.listAgents(),
 });

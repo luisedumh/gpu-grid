@@ -27,5 +27,18 @@ export function createAgentRouter(token: string) {
     res.sendFile(job.binaryPath);
   });
 
+  /** GET /api/agent/jobs/:id/archive — the uploaded .tar of a Docker job being run. */
+  router.get('/jobs/:id/archive', async (req: Request<{ id: string }>, res: Response) => {
+    const job = await prisma.job.findUnique({
+      where: { id: req.params.id },
+      select: { status: true, kind: true, archivePath: true },
+    });
+    if (!job || job.status !== 'RUNNING' || job.kind !== 'DOCKER' || !job.archivePath) {
+      throw new NotFoundError('No image available for this job');
+    }
+    // sendFile streams it: a .tar can weigh gigabytes
+    res.sendFile(job.archivePath);
+  });
+
   return router;
 }

@@ -25,8 +25,9 @@ export interface AppDeps extends JobsDeps {
 export function createApp(deps: AppDeps = {}) {
   const app = express();
 
-  // Parse JSON bodies; CUDA sources can be large, so allow up to 256 KB
-  app.use(express.json({ limit: '256kb' }));
+  // Parse JSON bodies; projects can have up to 500 000 characters of code, so allow 1 MB.
+  // (Docker images are not JSON: they are uploaded as multipart, see jobs.routes.ts.)
+  app.use(express.json({ limit: '1mb' }));
 
   // Works out who is making each request (from the session cookie)
   app.use(authenticate);

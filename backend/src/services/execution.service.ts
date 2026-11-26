@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { prisma } from '../lib/prisma.js';
 import type { JobResult } from '../agents/protocol.js';
 
@@ -25,7 +26,14 @@ export async function claimNextJob() {
     if (claimed.count === 1) {
       return prisma.job.findUniqueOrThrow({
         where: { id: next.id },
-        select: { id: true, timeoutSeconds: true },
+        select: {
+          id: true,
+          timeoutSeconds: true,
+          kind: true,
+          image: true,
+          archivePath: true,
+          command: true,
+        },
       });
     }
   }
@@ -48,6 +56,16 @@ export async function saveResult(jobId: string, result: JobResult) {
       finishedAt: new Date(),
     },
   });
+  await deleteImageArchive(jobId);
+}
+
+/**
+ * Once a Docker job has finished, its uploaded .tar is no longer needed:
+ * it is deleted so the server's disk does not fill up with images.
+ */
+async function deleteImageArchive(jobId: string) {
+  const job = await prisma.job.findUnique({ where: { id: jobId }, select: { archivePath: true } });
+  if (job?.archivePath) await rm(job.archivePath, { force: true });
 }
 
 /**
@@ -67,6 +85,7 @@ export async function releaseJob(jobId: string, reason: string) {
         finishedAt: new Date(),
       },
     });
+    await deleteImageArchive(jobId);
   } else {
     await prisma.job.updateMany({
       where: { id: jobId, status: 'RUNNING' },

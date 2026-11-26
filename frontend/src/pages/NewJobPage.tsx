@@ -1,17 +1,54 @@
-import { Play, Upload } from 'lucide-react';
-import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { ApiError, FINAL_STATUSES, createJob } from '../api/jobs.ts';
+import { Box, Code2, Play } from 'lucide-react';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import {
+  FINAL_STATUSES,
+  createDockerJob,
+  createJob,
+  describeError,
+  uploadDockerArchive,
+  type JobKind,
+} from '../api/jobs.ts';
 import { CodeEditor } from '../components/CodeEditor.tsx';
+import { DockerJobForm, type DockerSource } from '../components/DockerJobForm.tsx';
+import { EditorTabs } from '../components/EditorTabs.tsx';
+import { FileExplorer } from '../components/FileExplorer.tsx';
 import { JobConsole } from '../components/JobConsole.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { VECTOR_ADD_EXAMPLE } from '../examples/vector-add.ts';
 import { useJob } from '../hooks/useJob.ts';
+import { isValidImageReference } from '../lib/docker.ts';
+import {
+  checkProject,
+  deletePath,
+  isAllowedFile,
+  languageFor,
+  normalizePath,
+  projectPayload,
+  readUploadedFiles,
+  readZip,
+  renamePath,
+  type ProjectFiles,
+  type UploadResult,
+} from '../lib/project.ts';
 
 const TIMEOUT_OPTIONS = [10, 30, 60, 120, 300];
+const FIRST_FILE = 'vector_add.cu';
 
 export function NewJobPage() {
-  const [fileName, setFileName] = useState('vector_add.cu');
-  const [sourceCode, setSourceCode] = useState(VECTOR_ADD_EXAMPLE);
+  const [kind, setKind] = useState<JobKind>('CUDA');
+
+  // Docker image job
+  const [dockerSource, setDockerSource] = useState<DockerSource>('registry');
+  const [image, setImage] = useState('');
+  const [archive, setArchive] = useState<File | null>(null);
+  const [command, setCommand] = useState('');
+  const [progress, setProgress] = useState<number | null>(null);
+
+  const [files, setFiles] = useState<ProjectFiles>({ [FIRST_FILE]: VECTOR_ADD_EXAMPLE });
+  const [tabs, setTabs] = useState<string[]>([FIRST_FILE]);
+  const [active, setActive] = useState<string | null>(FIRST_FILE);
+  const [notice, setNotice] = useState<string | null>(null);
+
   const [name, setName] = useState('Vector addition');
   const [timeoutSeconds, setTimeoutSeconds] = useState(60);
   const [submitting, setSubmitting] = useState(false);
@@ -19,72 +56,230 @@ export function NewJobPage() {
   const [jobId, setJobId] = useState<string | null>(null);
 
   const { job, error: jobError } = useJob(jobId);
-  const fileInput = useRef<HTMLInputElement>(null);
-
   const busy = submitting || (job !== null && !FINAL_STATUSES.includes(job.status));
+  const paths = Object.keys(files);
 
-  /** Loads a .cu file from the user's computer into the editor. */
-  async function handleFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setSourceCode(await file.text());
-    setFileName(file.name);
-    setName(file.name.replace(/\.cu$/, ''));
-    event.target.value = '';
+  // ----- Tabs -----
+
+  function open(path: string) {
+    setTabs((prev) => (prev.includes(path) ? prev : [...prev, path]));
+    setActive(path);
+  }
+
+  function closeTab(path: string) {
+    const index = tabs.indexOf(path);
+    const next = tabs.filter((p) => p !== path);
+    setTabs(next);
+    if (active === path) setActive(next[Math.min(index, next.length - 1)] ?? null);
+  }
+
+  /** After renaming or deleting, tabs of files that moved or disappeared are updated. */
+  function syncTabs(nextFiles: ProjectFiles, map: (path: string) => string | null) {
+    const nextTabs = tabs.map(map).filter((p): p is string => p !== null && p in nextFiles);
+    setTabs(nextTabs);
+    const mappedActive = active ? map(active) : null;
+    setActive(mappedActive && mappedActive in nextFiles ? mappedActive : (nextTabs[0] ?? null));
+  }
+
+  // ----- Explorer actions -----
+
+  function createFile(rawPath: string): string | null {
+    const path = normalizePath(rawPath);
+    if (!path) return 'Invalid name';
+    if (!isAllowedFile(path)) return 'Use .cu, .cuh, .h, .hpp, .c, .cc, .cpp, .txt or .md';
+    if (path in files) return `${path} already exists`;
+    setFiles({ ...files, [path]: '' });
+    open(path);
+    return null;
+  }
+
+  function rename(from: string, to: string): string | null {
+    const result = renamePath(files, from, to);
+    if ('error' in result) return result.error;
+    const target = normalizePath(to)!;
+    setFiles(result.files);
+    syncTabs(result.files, (p) =>
+      p === from || p.startsWith(`${from}/`) ? target + p.slice(from.length) : p,
+    );
+    return null;
+  }
+
+  function remove(path: string) {
+    const next = deletePath(files, path);
+    setFiles(next);
+    syncTabs(next, (p) => p);
+  }
+
+  /**
+   * A folder or a .zip replaces the whole project; loose files are added to it.
+   * The job takes the name of the folder or the .zip.
+   */
+  function applyUpload(
+    { files: uploaded, skipped }: UploadResult,
+    replace: boolean,
+    jobName?: string,
+  ) {
+    const uploadedPaths = Object.keys(uploaded);
+    if (uploadedPaths.length === 0) {
+      setNotice('No valid files found (.cu, .cuh, .h, .hpp, .c, .cc, .cpp, .txt or .md).');
+      return;
+    }
+    const next = replace ? uploaded : { ...files, ...uploaded };
+    setFiles(next);
+    // Open main.cu if there is one; otherwise the first .cu file
+    const first =
+      uploadedPaths.find((p) => p.split('/').pop() === 'main.cu') ??
+      uploadedPaths.find((p) => p.endsWith('.cu')) ??
+      uploadedPaths[0];
+    setTabs(replace ? [first] : (prev) => (prev.includes(first) ? prev : [...prev, first]));
+    setActive(first);
+    if (jobName) setName(jobName);
+    setNotice(
+      skipped.length > 0
+        ? `Skipped ${skipped.length} file(s) that are not source code: ${skipped.slice(0, 3).join(', ')}${skipped.length > 3 ? '…' : ''}`
+        : null,
+    );
+  }
+
+  async function uploadFiles(list: FileList) {
+    // When a folder is chosen, each file knows its path inside it ("folder/src/a.cu")
+    const folder = list[0]?.webkitRelativePath.split('/')[0];
+    applyUpload(await readUploadedFiles(list), Boolean(folder), folder || undefined);
+  }
+
+  async function uploadZip(file: File) {
+    try {
+      applyUpload(await readZip(file), true, file.name.replace(/\.zip$/i, ''));
+    } catch {
+      setNotice('Could not read the .zip file.');
+    }
+  }
+
+  // ----- Run -----
+
+  /** Checks what is about to be sent; returns the problem to show, or null. */
+  function validate(): string | null {
+    if (kind === 'CUDA') return checkProject(files);
+    if (dockerSource === 'registry') {
+      return isValidImageReference(image) ? null : 'Write a valid image name, e.g. ubuntu:24.04';
+    }
+    return archive ? null : 'Choose the .tar of the image';
+  }
+
+  /** Sends the job in the way each kind needs. */
+  function send() {
+    const cmd = command.trim() || undefined;
+    if (kind === 'CUDA') return createJob(projectPayload(name, timeoutSeconds, files));
+    if (dockerSource === 'registry') {
+      return createDockerJob({ name, timeoutSeconds, image: image.trim(), command: cmd });
+    }
+    setProgress(0);
+    return uploadDockerArchive(
+      { name, timeoutSeconds, command: cmd, archive: archive! },
+      setProgress,
+    );
   }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    setSubmitting(true);
     setSubmitError(null);
+    const problem = validate();
+    if (problem) {
+      setSubmitError(problem);
+      return;
+    }
+    setSubmitting(true);
     try {
-      const created = await createJob({ name, sourceCode, timeoutSeconds });
+      const created = await send();
       setJobId(created.id);
     } catch (err) {
-      const details = err instanceof ApiError && err.details.length > 0 ? err.details : null;
-      setSubmitError(
-        details
-          ? details.map((d) => `${d.field}: ${d.message}`).join('\n')
-          : (err as Error).message,
-      );
+      setSubmitError(describeError(err));
     } finally {
       setSubmitting(false);
+      setProgress(null);
     }
   }
 
   return (
     <>
-      <PageHeader
-        title="New job"
-        subtitle="Write or upload your CUDA program and run it on a GPU"
-      />
+      <PageHeader title="New job" subtitle="Run a CUDA project or a Docker image on a GPU" />
 
       <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 gap-5 p-6">
-        {/* Left: editor and console */}
+        {/* Left: explorer + editor, and the console */}
         <div className="flex min-w-0 flex-1 flex-col gap-4">
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <div className="flex items-center border-b border-slate-200 px-4 py-2.5">
-              <span className="font-mono text-sm font-semibold">{fileName}</span>
-              <button
-                type="button"
-                onClick={() => fileInput.current?.click()}
-                className="ml-auto inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50"
-              >
-                <Upload className="size-4" />
-                Upload file
-              </button>
-              <input
-                ref={fileInput}
-                type="file"
-                accept=".cu,.cpp,.cuh,.h"
-                onChange={handleFile}
-                className="hidden"
-              />
-            </div>
-            <div className="min-h-0 flex-1">
-              <CodeEditor value={sourceCode} onChange={setSourceCode} />
-            </div>
+          <div
+            role="tablist"
+            aria-label="Kind of job"
+            className="flex gap-1 self-start rounded-xl bg-slate-200/70 p-1"
+          >
+            <KindTab
+              selected={kind === 'CUDA'}
+              onSelect={() => setKind('CUDA')}
+              icon={<Code2 className="size-4" />}
+              label="CUDA project"
+              disabled={busy}
+            />
+            <KindTab
+              selected={kind === 'DOCKER'}
+              onSelect={() => setKind('DOCKER')}
+              icon={<Box className="size-4" />}
+              label="Docker image"
+              disabled={busy}
+            />
           </div>
+
+          {kind === 'DOCKER' ? (
+            <DockerJobForm
+              source={dockerSource}
+              onSourceChange={setDockerSource}
+              image={image}
+              onImageChange={setImage}
+              archive={archive}
+              onArchiveChange={setArchive}
+              command={command}
+              onCommandChange={setCommand}
+              progress={progress}
+              disabled={busy}
+            />
+          ) : (
+            <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-[#1e1e1e]">
+              <FileExplorer
+                paths={paths}
+                activePath={active}
+                onOpen={open}
+                onCreate={createFile}
+                onRename={rename}
+                onDelete={remove}
+                onUploadFiles={uploadFiles}
+                onUploadZip={uploadZip}
+                disabled={busy}
+              />
+              <div className="flex min-w-0 flex-1 flex-col">
+                <EditorTabs tabs={tabs} active={active} onSelect={setActive} onClose={closeTab} />
+                <div className="min-h-0 flex-1">
+                  {active ? (
+                    <CodeEditor
+                      path={active}
+                      language={languageFor(active)}
+                      value={files[active] ?? ''}
+                      onChange={(value) => setFiles((prev) => ({ ...prev, [active]: value }))}
+                    />
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-500">
+                      <Code2 className="size-8" />
+                      Open a file from the explorer
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {kind === 'CUDA' && notice && (
+            <p role="status" className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {notice}
+            </p>
+          )}
 
           <JobConsole job={job} error={submitError ?? jobError} />
         </div>
@@ -127,7 +322,7 @@ export function NewJobPage() {
 
           <button
             type="submit"
-            disabled={busy || sourceCode.trim() === ''}
+            disabled={busy || (kind === 'CUDA' && paths.length === 0)}
             className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-500 font-semibold text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Play className="size-4" />
@@ -135,11 +330,49 @@ export function NewJobPage() {
           </button>
 
           <p className="text-xs leading-relaxed text-slate-500">
-            Your program is compiled with <span className="font-mono">nvcc</span> and runs on a
-            provider&apos;s NVIDIA GPU. Whatever it prints appears in the console.
+            {kind === 'CUDA' ? (
+              <>
+                Every <span className="font-mono">.cu</span> file of the project is compiled
+                together with <span className="font-mono">nvcc</span> and the program runs on a
+                provider&apos;s NVIDIA GPU.
+              </>
+            ) : (
+              <>The image runs on a provider&apos;s NVIDIA GPU, with no need to compile anything.</>
+            )}{' '}
+            Whatever it prints appears in the console.
           </p>
         </aside>
       </form>
     </>
+  );
+}
+
+function KindTab({
+  selected,
+  onSelect,
+  icon,
+  label,
+  disabled,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  icon: ReactNode;
+  label: string;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onSelect}
+      disabled={disabled}
+      className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm font-medium ${
+        selected ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
