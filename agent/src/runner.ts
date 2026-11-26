@@ -54,12 +54,30 @@ export function dockerRunArgs(options: RunOptions, containerName: string, user: 
   ];
 }
 
+/** User and group of the agent: containers never run as root. */
+export function currentUser() {
+  return `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+}
+
 /** Runs a compiled CUDA binary inside a Docker container (see dockerRunArgs). */
 export function runBinary(options: RunOptions): Promise<RunResult> {
   const containerName = `gpugrid-job-${randomUUID()}`;
-  const user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
-  const args = dockerRunArgs(options, containerName, user);
+  return runContainer(
+    dockerRunArgs(options, containerName, currentUser()),
+    containerName,
+    options.timeoutMs,
+  );
+}
 
+/**
+ * Runs `docker <args>` for a container called containerName, collecting its output,
+ * and kills the container if it goes over timeoutMs.
+ */
+export function runContainer(
+  args: string[],
+  containerName: string,
+  timeoutMs: number,
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const start = performance.now();
     const child = spawn('docker', args);
@@ -83,7 +101,7 @@ export function runBinary(options: RunOptions): Promise<RunResult> {
     const timer = setTimeout(() => {
       timedOut = true;
       spawn('docker', ['kill', containerName]);
-    }, options.timeoutMs);
+    }, timeoutMs);
 
     child.on('error', (err) => {
       clearTimeout(timer);

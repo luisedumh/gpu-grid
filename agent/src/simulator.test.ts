@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { SIMULATED_GPU, simulateBinary } from './simulator.js';
+import { SIMULATED_GPU, simulateBinary, simulatedDockerImages } from './simulator.js';
 
 describe('simulation mode', () => {
   let dir: string;
@@ -37,5 +37,30 @@ describe('simulation mode', () => {
       simulateBinary({ binaryDir: dir, binaryName: 'missing', timeoutMs: 5000 }, 10),
       /ENOENT/,
     );
+  });
+
+  it('pretends to run Docker images without downloading or deleting anything', async () => {
+    const image = await simulatedDockerImages.pull('nvidia/cuda:12.4.1-base-ubuntu22.04', 1000);
+    const result = await simulatedDockerImages.run({
+      image: image.ref,
+      command: 'nvidia-smi',
+      timeoutMs: 5000,
+    });
+
+    assert.equal(image.remove, false);
+    assert.equal(result.exitCode, 0);
+    assert.match(
+      result.stdout,
+      /\[simulated\] Image nvidia\/cuda:12\.4\.1-base-ubuntu22\.04 run with nvidia-smi/,
+    );
+  });
+
+  it('receives an uploaded .tar and reports its size', async () => {
+    const tar = path.join(dir, 'image.tar');
+    await writeFile(tar, Buffer.alloc(2048));
+
+    const image = await simulatedDockerImages.load(tar);
+
+    assert.equal(image.ref, 'uploaded image (2048 bytes)');
   });
 });

@@ -1,11 +1,12 @@
 import 'dotenv/config';
 import WebSocket from 'ws';
 import { config } from './config.js';
+import { realDockerImages } from './docker-image.js';
 import { readGpuInfo } from './gpu-info.js';
 import type { AgentMessage, ServerMessage } from './protocol.js';
 import { runJob, type JobDeps, type JobMessage } from './run-job.js';
 import { runBinary } from './runner.js';
-import { SIMULATED_GPU, simulateBinary } from './simulator.js';
+import { SIMULATED_GPU, simulateBinary, simulatedDockerImages } from './simulator.js';
 
 if (!config.token) {
   console.error('AGENT_TOKEN is not set. Add it to agent/.env (see .env.example).');
@@ -19,6 +20,9 @@ const deps: JobDeps = {
   serverUrl: config.serverUrl,
   token: config.token,
   runBinary: config.simulate ? simulateBinary : runBinary,
+  docker: config.simulate ? simulatedDockerImages : realDockerImages,
+  maxImageBytes: config.maxImageBytes,
+  pullTimeoutMs: config.pullTimeoutMs,
 };
 if (config.simulate) console.log('Simulation mode: jobs will not really run on a GPU.');
 let reconnectAttempts = 0;
@@ -72,7 +76,8 @@ function connect() {
 
 /** Runs a job and reports its result to the server. */
 async function handleJob(job: JobMessage, send: (message: AgentMessage) => void) {
-  console.log(`Running job ${job.jobId} (limit ${job.timeoutSeconds} s)`);
+  const what = job.kind === 'DOCKER' ? `image ${job.image ?? '(uploaded .tar)'}` : 'CUDA program';
+  console.log(`Running job ${job.jobId}: ${what} (limit ${job.timeoutSeconds} s)`);
   const result = await runJob(job, deps);
   send(result);
   if (result.stderr.startsWith('Agent error:')) {
