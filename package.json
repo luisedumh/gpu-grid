@@ -4,7 +4,8 @@
   "description": "Distributed GPU computing platform: run CUDA code on other people's idle GPUs.",
   "scripts": {
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "smoke": "bash scripts/smoke-test.sh"
   },
   "devDependencies": {
     "prettier": "^3.9.10"
