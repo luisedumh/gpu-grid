@@ -1,4 +1,4 @@
-import type { GpuInfo, JobResult, ServerMessage } from './protocol.js';
+import type { GpuInfo, JobMessage, JobResult, ServerMessage } from './protocol.js';
 import { claimNextJob, releaseJob, saveResult } from '../services/execution.service.js';
 
 /** A provider agent currently connected to this server. */
@@ -92,12 +92,7 @@ export class Scheduler {
           }
 
           agent.currentJobId = job.id;
-          agent.send({
-            type: 'job',
-            jobId: job.id,
-            timeoutSeconds: job.timeoutSeconds,
-            binaryPath: `/api/agent/jobs/${job.id}/binary`,
-          });
+          agent.send(jobMessage(job));
         }
       } while (this.dispatchRequested);
     } catch (err) {
@@ -106,4 +101,27 @@ export class Scheduler {
       this.dispatching = false;
     }
   }
+}
+
+/** What the agent needs to run a job; files are downloaded from the agent endpoints. */
+function jobMessage(job: {
+  id: string;
+  timeoutSeconds: number;
+  kind: 'CUDA' | 'DOCKER';
+  image: string | null;
+  archivePath: string | null;
+  command: string | null;
+}): JobMessage {
+  const base = { type: 'job', jobId: job.id, timeoutSeconds: job.timeoutSeconds } as const;
+  if (job.kind === 'CUDA') {
+    return { ...base, kind: 'CUDA', binaryPath: `/api/agent/jobs/${job.id}/binary` };
+  }
+  return {
+    ...base,
+    kind: 'DOCKER',
+    image: job.image,
+    // The agent never sees where the file is stored on the server, only where to download it
+    archivePath: job.archivePath ? `/api/agent/jobs/${job.id}/archive` : null,
+    command: job.command,
+  };
 }

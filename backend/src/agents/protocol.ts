@@ -35,10 +35,25 @@ export type GpuInfo = z.infer<typeof gpuSchema>;
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
 export type JobResult = Omit<z.infer<typeof resultSchema>, 'type' | 'jobId'>;
 
+/**
+ * A job for an agent. CUDA jobs bring where to download their compiled binary;
+ * Docker jobs bring the image by name, or where to download the uploaded .tar.
+ * Must match agent/src/protocol.ts.
+ */
+export type JobMessage =
+  | { type: 'job'; jobId: string; timeoutSeconds: number; kind: 'CUDA'; binaryPath: string }
+  | {
+      type: 'job';
+      jobId: string;
+      timeoutSeconds: number;
+      kind: 'DOCKER';
+      image: string | null;
+      archivePath: string | null;
+      command: string | null;
+    };
+
 /** Messages the server sends to agents. */
-export type ServerMessage =
-  | { type: 'welcome'; agentId: string }
-  | { type: 'job'; jobId: string; timeoutSeconds: number; binaryPath: string };
+export type ServerMessage = { type: 'welcome'; agentId: string } | JobMessage;
 
 /** Parses a raw message; returns null if it is not valid JSON or not a known message. */
 export function parseAgentMessage(raw: string): AgentMessage | null {

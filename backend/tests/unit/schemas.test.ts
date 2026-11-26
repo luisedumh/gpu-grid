@@ -3,6 +3,7 @@ import { loginSchema, registerSchema } from '../../src/schemas/auth.schema.js';
 import {
   cleanProjectPath,
   createJobSchema,
+  dockerArchiveJobSchema,
   JOB_LIMITS,
   listJobsQuerySchema,
 } from '../../src/schemas/jobs.schema.js';
@@ -10,8 +11,11 @@ import {
 describe('createJobSchema', () => {
   const job = { name: 'Vector addition', sourceCode: 'int main() {}' };
 
-  it('accepts a job and trims its name', () => {
-    expect(createJobSchema.parse({ ...job, name: '  Vector addition  ' })).toEqual(job);
+  it('accepts a job and trims its name; without "kind" it is a CUDA job', () => {
+    expect(createJobSchema.parse({ ...job, name: '  Vector addition  ' })).toEqual({
+      ...job,
+      kind: 'CUDA',
+    });
   });
 
   it('makes the time limit optional, but between 1 and 300 seconds', () => {
@@ -99,5 +103,60 @@ describe('cleanProjectPath', () => {
     ]) {
       expect(cleanProjectPath(bad), bad).toBeNull();
     }
+  });
+});
+
+describe('Docker jobs', () => {
+  const docker = { kind: 'DOCKER', name: 'Docker job' };
+
+  it('accepts image references of Docker Hub and other registries', () => {
+    for (const image of [
+      'ubuntu',
+      'nvidia/cuda:13.0.1-base-ubuntu24.04',
+      'ghcr.io/luisedumh/gpu-grid-demo:latest',
+      'localhost:5000/team/app_v2',
+      `ubuntu@sha256:${'a'.repeat(64)}`,
+    ]) {
+      expect(createJobSchema.safeParse({ ...docker, image }).success, image).toBe(true);
+    }
+  });
+
+  it('rejects image references that are not valid or could be taken as docker options', () => {
+    for (const image of [
+      '',
+      '-v /:/host',
+      '--privileged',
+      'Ubuntu',
+      'ubuntu latest',
+      'a;rm -rf /',
+      'a/',
+    ]) {
+      expect(createJobSchema.safeParse({ ...docker, image }).success, image).toBe(false);
+    }
+  });
+
+  it('treats an empty command as "the default command of the image"', () => {
+    const parsed = createJobSchema.parse({ ...docker, image: 'ubuntu', command: '   ' });
+    expect(parsed).toEqual({ ...docker, image: 'ubuntu', command: undefined });
+  });
+
+  it('reads the fields of the upload form, which arrive as text', () => {
+    expect(dockerArchiveJobSchema.parse({ name: ' Mine ', timeoutSeconds: '30' })).toEqual({
+      name: 'Mine',
+      timeoutSeconds: 30,
+      command: undefined,
+    });
+    expect(dockerArchiveJobSchema.safeParse({ name: 'x', timeoutSeconds: 'abc' }).success).toBe(
+      false,
+    );
+    expect(dockerArchiveJobSchema.safeParse({ name: 'x', timeoutSeconds: '0' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects unknown kinds of job', () => {
+    expect(createJobSchema.safeParse({ ...docker, kind: 'VM', image: 'ubuntu' }).success).toBe(
+      false,
+    );
   });
 });

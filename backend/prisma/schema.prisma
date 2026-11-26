@@ -24,13 +24,32 @@ enum JobStatus {
   TIMED_OUT      // killed after exceeding its time limit (final)
 }
 
-/// A CUDA program submitted by a client, and everything that happened to it.
+/// What a job runs: a CUDA program compiled by us, or a Docker image of the client.
+enum JobKind {
+  CUDA   // source code compiled with nvcc (one file or a project)
+  DOCKER // image given by name or uploaded as a .tar; it is not compiled
+}
+
+/// A job submitted by a client (CUDA program or Docker image), and everything that happened to it.
 model Job {
   id             String    @id @default(uuid())
   name           String
+  kind           JobKind   @default(CUDA)
+  /// CUDA: the code (main file of a project). Empty for Docker jobs.
   sourceCode     String
   /// Projects of several files: [{ path, content }]. Null for single-file jobs (only sourceCode).
   files          Json?
+
+  // Docker jobs
+  /// Image published in a registry, e.g. nvidia/cuda:13.0.1-base-ubuntu24.04
+  image            String?
+  /// Original name of the uploaded .tar (the client sees it)
+  imageArchiveName String?
+  /// Where the uploaded .tar is stored on the server (private)
+  archivePath      String?
+  /// Command run inside the container; null runs the image's default one
+  command          String?
+
   status         JobStatus @default(PENDING)
   timeoutSeconds Int       @default(60)
 

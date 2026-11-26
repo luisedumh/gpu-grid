@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -207,6 +207,87 @@ describe('job execution', () => {
     const receivers = [first, second].filter((a) => a.messages.some((m) => m.type === 'job'));
     expect(receivers).toHaveLength(1);
     expect(await jobStatus(job.id)).toBe('RUNNING');
+  });
+});
+
+describe('Docker jobs', () => {
+  /** A Docker job from an uploaded .tar, as the upload route leaves it. */
+  async function createArchiveJob() {
+    const job = await createJob({ name: 'Docker', sourceCode: '' });
+    const archivePath = path.join(jobsDir, `${job.id}.tar`);
+    await writeFile(archivePath, 'fake image');
+    return prisma.job.update({
+      where: { id: job.id },
+      data: { kind: 'DOCKER', status: 'QUEUED', archivePath, imageArchiveName: 'mine.tar' },
+    });
+  }
+
+  const finish = (agent: Awaited<ReturnType<typeof connectAgent>>, jobId: string) =>
+    agent.ws.send(
+      JSON.stringify({
+        type: 'result',
+        jobId,
+        exitCode: 0,
+        stdout: 'done',
+        stderr: '',
+        durationMs: 10,
+        timedOut: false,
+      }),
+    );
+
+  it('sends the image name and the command of a Docker job', async () => {
+    const job = await createJob({ name: 'By name', sourceCode: '' });
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { kind: 'DOCKER', status: 'QUEUED', image: 'ubuntu:24.04', command: 'echo hi' },
+    });
+    const agent = await connectAgent();
+
+    expect(await agent.nextJob()).toEqual({
+      type: 'job',
+      jobId: job.id,
+      timeoutSeconds: 60,
+      kind: 'DOCKER',
+      image: 'ubuntu:24.04',
+      archivePath: null,
+      command: 'echo hi',
+    });
+  });
+
+  it('lets the agent download the uploaded .tar with its token, and deletes it at the end', async () => {
+    const job = await createArchiveJob();
+    const agent = await connectAgent();
+
+    const assigned = await agent.nextJob();
+    expect(assigned).toMatchObject({ kind: 'DOCKER', image: null, command: null });
+    const archiveUrl = `${baseUrl}${(assigned as { archivePath: string }).archivePath}`;
+    expect(archiveUrl).toBe(`${baseUrl}/api/agent/jobs/${job.id}/archive`);
+
+    const withoutToken = await fetch(archiveUrl);
+    const withToken = await fetch(archiveUrl, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    expect(withoutToken.status).toBe(401);
+    expect(await withToken.text()).toBe('fake image');
+
+    finish(agent, job.id);
+    await waitFor(async () => (await jobStatus(job.id)) === 'COMPLETED');
+    await expect(access(job.archivePath!)).rejects.toThrow();
+  });
+
+  it('only serves the .tar of jobs that are running', async () => {
+    const job = await createArchiveJob();
+
+    const response = await fetch(`${baseUrl}/api/agent/jobs/${job.id}/archive`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it('tells CUDA jobs apart, so agents know they must download a binary', async () => {
+    await createQueuedJob();
+    const agent = await connectAgent();
+
+    expect(await agent.nextJob()).toMatchObject({ kind: 'CUDA' });
   });
 });
 
