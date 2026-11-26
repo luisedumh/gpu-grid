@@ -5,7 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { compileJob, recoverPendingJobs } from '../src/compiler/compile-job.js';
 import type { Compiler } from '../src/compiler/docker-compiler.js';
 import { prisma } from '../src/lib/prisma.js';
-import { createJob } from './helpers.js';
+import { createJob, createUser } from './helpers.js';
 
 let jobsDir: string;
 
@@ -36,12 +36,60 @@ describe('compileJob', () => {
     await compileJob(job.id, { compiler, jobsDir });
 
     const workDir = path.join(jobsDir, job.id);
-    expect(compiler).toHaveBeenCalledWith(workDir);
+    expect(compiler).toHaveBeenCalledWith(workDir, ['main.cu']);
     expect(await readFile(path.join(workDir, 'main.cu'), 'utf8')).toBe('__global__ void k() {}');
 
     const updated = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(updated.status).toBe('QUEUED');
     expect(updated.binaryPath).toBe(path.join(workDir, 'program'));
+  });
+
+  it('writes every file of a project with its folders and compiles all its .cu files', async () => {
+    const { id: clientId } = await createUser('CLIENT');
+    const job = await prisma.job.create({
+      data: {
+        name: 'Project',
+        sourceCode: 'int main() {}',
+        clientId,
+        files: [
+          { path: 'main.cu', content: 'int main() {}' },
+          { path: 'src/kernels.cu', content: '__global__ void k() {}' },
+          { path: 'include/kernels.cuh', content: 'void launch();' },
+        ],
+      },
+    });
+    const compiler = fakeCompiler({ success: true, output: '', timedOut: false });
+
+    await compileJob(job.id, { compiler, jobsDir });
+
+    const workDir = path.join(jobsDir, job.id);
+    expect(compiler).toHaveBeenCalledWith(workDir, ['main.cu', 'src/kernels.cu']);
+    expect(await readFile(path.join(workDir, 'src/kernels.cu'), 'utf8')).toBe(
+      '__global__ void k() {}',
+    );
+    expect(await readFile(path.join(workDir, 'include/kernels.cuh'), 'utf8')).toBe(
+      'void launch();',
+    );
+  });
+
+  it('never writes outside the job folder, even with a bad path in the database', async () => {
+    const { id: clientId } = await createUser('CLIENT');
+    const job = await prisma.job.create({
+      data: {
+        name: 'Evil',
+        sourceCode: 'x',
+        clientId,
+        files: [{ path: '../../escape.cu', content: 'pwned' }],
+      },
+    });
+    const compiler = fakeCompiler({ success: true, output: '', timedOut: false });
+
+    await compileJob(job.id, { compiler, jobsDir });
+
+    const updated = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(compiler).not.toHaveBeenCalled();
+    expect(updated.status).toBe('COMPILE_FAILED');
+    expect(updated.compilerOutput).toBe('Invalid file path: ../../escape.cu');
   });
 
   it('marks the job as COMPILE_FAILED and keeps the compiler output', async () => {

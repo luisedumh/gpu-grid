@@ -79,6 +79,96 @@ describe('POST /api/jobs', () => {
   });
 });
 
+describe('POST /api/jobs with a project of several files', () => {
+  const project = {
+    name: 'Vector addition project',
+    files: [
+      { path: 'main.cu', content: '#include "include/kernels.cuh"\nint main() { launch(); }' },
+      { path: 'src/kernels.cu', content: '__global__ void k() {}\nvoid launch() {}' },
+      { path: 'include/kernels.cuh', content: 'void launch();' },
+    ],
+  };
+
+  it('stores every file with its path, and main.cu as the code of the job', async () => {
+    const response = await client.post('/api/jobs').send(project);
+
+    expect(response.status).toBe(201);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: response.body.id } });
+    expect(stored.files).toEqual(project.files);
+    expect(stored.sourceCode).toBe(project.files[0].content);
+  });
+
+  it('returns the files of the job, also for jobs of a single file', async () => {
+    const multi = await client.post('/api/jobs').send(project);
+    const single = await client.post('/api/jobs').send(validJob);
+
+    const multiJob = await client.get(`/api/jobs/${multi.body.id}`);
+    const singleJob = await client.get(`/api/jobs/${single.body.id}`);
+
+    expect(multiJob.body.files).toEqual(project.files);
+    expect(singleJob.body.files).toEqual([{ path: 'main.cu', content: validJob.sourceCode }]);
+    expect(multiJob.body).not.toHaveProperty('sourceCode');
+  });
+
+  it('cleans Windows paths', async () => {
+    const response = await client.post('/api/jobs').send({
+      name: 'Windows',
+      files: [{ path: 'src\\main.cu', content: 'int main() {}' }],
+    });
+
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: response.body.id } });
+    expect(stored.files).toEqual([{ path: 'src/main.cu', content: 'int main() {}' }]);
+  });
+
+  it.each([
+    ['a path that leaves the project', '../outside.cu'],
+    ['an absolute path', '/etc/passwd.cu'],
+    ['a hidden file', '.secret.cu'],
+    ['a file that is not source code', 'run.sh'],
+    ['a path inside "program", the compiled binary', 'program/x.cu'],
+  ])('rejects %s', async (_case, path) => {
+    const response = await client.post('/api/jobs').send({
+      name: 'Bad',
+      files: [
+        { path: 'main.cu', content: 'int main() {}' },
+        { path, content: 'x' },
+      ],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.details[0].field).toBe('files.1.path');
+    expect(await prisma.job.count()).toBe(0);
+  });
+
+  it('rejects projects without .cu files and repeated paths', async () => {
+    const noCu = await client.post('/api/jobs').send({
+      name: 'No CUDA',
+      files: [{ path: 'notes.txt', content: 'hi' }],
+    });
+    const repeated = await client.post('/api/jobs').send({
+      name: 'Twice',
+      files: [
+        { path: 'main.cu', content: 'a' },
+        { path: 'main.cu', content: 'b' },
+      ],
+    });
+
+    expect(noCu.body.details[0].message).toBe('The project needs at least one .cu file');
+    expect(repeated.body.details[0].message).toBe('main.cu appears twice');
+  });
+
+  it('needs either sourceCode or files, not both', async () => {
+    const both = await client.post('/api/jobs').send({ ...project, sourceCode: 'int main() {}' });
+    const none = await client.post('/api/jobs').send({ name: 'Nothing' });
+
+    expect(both.status).toBe(400);
+    expect(none.status).toBe(400);
+    expect(none.body.details[0].message).toBe(
+      'Send either sourceCode (one file) or files (a project)',
+    );
+  });
+});
+
 describe('GET /api/jobs/:id', () => {
   it('returns the job without internal fields', async () => {
     const created = await client.post('/api/jobs').send(validJob);

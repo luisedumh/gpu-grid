@@ -29,6 +29,8 @@ model Job {
   id             String    @id @default(uuid())
   name           String
   sourceCode     String
+  /// Projects of several files: [{ path, content }]. Null for single-file jobs (only sourceCode).
+  files          Json?
   status         JobStatus @default(PENDING)
   timeoutSeconds Int       @default(60)
 
