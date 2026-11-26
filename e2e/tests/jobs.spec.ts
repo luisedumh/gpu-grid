@@ -59,6 +59,16 @@ test.describe('Jobs', () => {
     await expect(page.getByText('exit code 0')).toBeVisible();
   });
 
+  test('runs a program on a simulated agent', { tag: '@simulated' }, async ({ page }) => {
+    // Needs an agent in simulation mode (AGENT_SIMULATE=1 npm start), as in GitHub Actions
+    await register(page, 'Client');
+    await submitJob(page, VECTOR_ADD, 'Simulated');
+
+    await expect(page.getByText('Completed', { exact: true })).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/\[simulated\] Program received \(\d+ bytes\)/)).toBeVisible();
+    await expect(page.getByText('exit code 0')).toBeVisible();
+  });
+
   test('a client cannot see the jobs of other clients', async ({ page }) => {
     // Ana sends a job and keeps its address
     await register(page, 'Client', 'Ana');

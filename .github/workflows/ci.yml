@@ -1,14 +1,26 @@
 name: CI
 
+# Every push to any branch, and every pull request to develop or main
 on:
+  push:
   pull_request:
     branches: [develop, main]
-  push:
-    branches: [develop, main]
+
+# A new push to the same branch cancels the run that was still going
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Secrets only valid inside the CI; the real ones are never in the repository
+  AGENT_TOKEN: ci-agent-token-not-secret
+  JWT_SECRET: ci-jwt-secret-that-is-at-least-32-characters
 
 jobs:
-  format:
-    name: Formatting (Prettier)
+  # ──────────────────────────────── PHASE 1: build, unit tests and smoke test ────────────────────────────────
+
+  build:
+    name: '1 · Build'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -19,16 +31,139 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+          cache-dependency-path: '**/package-lock.json'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Formatting (Prettier)
+        run: npm ci && npm run format:check
 
-      - name: Check formatting
-        run: npm run format:check
+      - name: Backend (lint, types, build)
+        working-directory: backend
+        run: |
+          npm ci
+          npx prisma generate
+          npm run lint
+          npm run typecheck
+          npm run build
 
-  backend:
-    name: Backend (lint, typecheck, test)
+      - name: Frontend (lint, types, build)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Agent (lint, types)
+        working-directory: agent
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+
+  unit:
+    name: '1 · Unit tests'
     runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Backend unit tests
+        working-directory: backend
+        run: |
+          npm ci
+          npx prisma generate
+          npm run test:unit
+
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+
+      - name: Agent unit tests
+        working-directory: agent
+        run: |
+          npm ci
+          npm test
+
+  smoke:
+    name: '1 · Smoke test'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: gpugrid
+          POSTGRES_PASSWORD: gpugrid
+          POSTGRES_DB: gpugrid
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gpugrid -d gpugrid"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://gpugrid:gpugrid@localhost:5432/gpugrid?schema=public
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      # The script is SCRUM-63; until it is merged this job only says so
+      - name: Is there a smoke test?
+        id: script
+        run: |
+          if [ -f scripts/smoke-test.sh ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::scripts/smoke-test.sh does not exist yet (SCRUM-63): smoke test skipped"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        if: steps.script.outputs.exists == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Build backend and frontend
+        if: steps.script.outputs.exists == 'true'
+        run: |
+          (cd backend && npm ci && npx prisma generate && npx prisma migrate deploy && npm run build)
+          (cd frontend && npm ci && npm run build)
+
+      - name: Smoke test
+        if: steps.script.outputs.exists == 'true'
+        run: bash scripts/smoke-test.sh
+
+  # ──────────────────────────────── PHASE 2: integration and end-to-end tests, report ────────────────────────────────
+
+  integration:
+    name: '2 · Integration tests'
+    needs: [build, unit, smoke]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: gpugrid
+          POSTGRES_PASSWORD: gpugrid
+          POSTGRES_DB: gpugrid_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gpugrid -d gpugrid_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -44,93 +179,124 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npx prisma generate
 
-      - name: Generate Prisma client
-        run: npx prisma generate
+      # Runs every backend test (unit and integration) and measures the coverage
+      - name: Integration tests with coverage
+        run: >-
+          npx vitest run --coverage
+          --coverage.reporter=text --coverage.reporter=html --coverage.reporter=json-summary
 
-      - name: Lint
-        run: npm run lint
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage/
 
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Run tests
-        run: npm test
+  e2e:
+    name: '2 · End-to-end tests'
+    needs: [build, unit, smoke]
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17-alpine
         env:
           POSTGRES_USER: gpugrid
           POSTGRES_PASSWORD: gpugrid
-          POSTGRES_DB: gpugrid_test
+          POSTGRES_DB: gpugrid
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U gpugrid -d gpugrid_test"
+          --health-cmd "pg_isready -U gpugrid -d gpugrid"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://gpugrid:gpugrid@localhost:5432/gpugrid_test?schema=public
-
-  agent:
-    name: Agent (lint, typecheck, test)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: agent
+      DATABASE_URL: postgresql://gpugrid:gpugrid@localhost:5432/gpugrid?schema=public
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      # The CUDA image is large: make room on the runner first
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Build the compiler image (nvcc)
+        run: docker build -t gpugrid-compiler compiler
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: agent/package-lock.json
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          (cd backend && npm ci && npx prisma generate && npx prisma migrate deploy)
+          (cd frontend && npm ci)
+          (cd agent && npm ci)
+          (cd e2e && npm ci && npx playwright install --with-deps chromium)
 
-      - name: Lint
-        run: npm run lint
+      - name: Start the backend and a simulated agent
+        run: |
+          (cd backend && nohup npm run dev > ../backend.log 2>&1 &)
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/api/health && break; sleep 1; done
+          (cd agent && AGENT_SIMULATE=1 nohup npm start > ../agent.log 2>&1 &)
 
-      - name: Type check
-        run: npm run typecheck
+      # GitHub has no GPU: every test runs except @gpu, which needs a real one
+      - name: End-to-end tests (Playwright)
+        working-directory: e2e
+        run: npx playwright test --grep-invert @gpu
 
-      - name: Run tests
-        run: npm test
-
-  frontend:
-    name: Frontend (lint, typecheck, test, build)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
+      - name: Upload Playwright report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          name: e2e-report
+          path: |
+            e2e/playwright-report/
+            backend.log
+            agent.log
 
-      - name: Install dependencies
-        run: npm ci
+  report:
+    name: '2 · Report'
+    needs: [build, unit, smoke, integration, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download coverage report
+        if: needs.integration.result != 'skipped'
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage
+        continue-on-error: true
 
-      - name: Lint
-        run: npm run lint
+      - name: Summary of the run
+        run: |
+          icon() { [ "$1" = "success" ] && echo "✅" || { [ "$1" = "skipped" ] && echo "⏭️" || echo "❌"; }; }
+          {
+            echo "## GPU Grid · CI"
+            echo
+            echo "| Phase | Job | Result |"
+            echo "|---|---|---|"
+            echo "| 1 | Build | $(icon '${{ needs.build.result }}') ${{ needs.build.result }} |"
+            echo "| 1 | Unit tests | $(icon '${{ needs.unit.result }}') ${{ needs.unit.result }} |"
+            echo "| 1 | Smoke test | $(icon '${{ needs.smoke.result }}') ${{ needs.smoke.result }} |"
+            echo "| 2 | Integration tests | $(icon '${{ needs.integration.result }}') ${{ needs.integration.result }} |"
+            echo "| 2 | End-to-end tests | $(icon '${{ needs.e2e.result }}') ${{ needs.e2e.result }} |"
+            echo
+            if [ -f coverage/coverage-summary.json ]; then
+              node -e "const t=require('./coverage/coverage-summary.json').total; console.log('**Backend coverage:** ' + t.lines.pct + ' % of lines, ' + t.branches.pct + ' % of branches.')"
+              echo
+            fi
+            echo "Reports to download at the bottom of this page: **backend-coverage** (open index.html) and **e2e-report** (Playwright report and logs)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Run tests
-        run: npm test
-
-      - name: Build
-        run: npm run build
+      - name: Fail if any job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
