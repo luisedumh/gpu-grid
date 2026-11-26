@@ -8,4 +8,6 @@ export const config = {
   token: process.env.AGENT_TOKEN ?? '',
   /** Name shown in the platform for this machine. */
   name: process.env.AGENT_NAME ?? os.hostname(),
+  /** AGENT_SIMULATE=1: pretend to run the jobs, for machines without a GPU (see simulator.ts). */
+  simulate: ['1', 'true', 'yes'].includes((process.env.AGENT_SIMULATE ?? '').toLowerCase()),
 };

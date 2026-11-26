@@ -1,12 +1,11 @@
 import 'dotenv/config';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import WebSocket from 'ws';
 import { config } from './config.js';
 import { readGpuInfo } from './gpu-info.js';
 import type { AgentMessage, ServerMessage } from './protocol.js';
+import { runJob, type JobDeps, type JobMessage } from './run-job.js';
 import { runBinary } from './runner.js';
+import { SIMULATED_GPU, simulateBinary } from './simulator.js';
 
 if (!config.token) {
   console.error('AGENT_TOKEN is not set. Add it to agent/.env (see .env.example).');
@@ -14,6 +13,14 @@ if (!config.token) {
 }
 
 const wsUrl = `${config.serverUrl.replace(/^http/, 'ws')}/ws/agent`;
+
+/** In simulation mode the jobs are not really run on a GPU (see simulator.ts). */
+const deps: JobDeps = {
+  serverUrl: config.serverUrl,
+  token: config.token,
+  runBinary: config.simulate ? simulateBinary : runBinary,
+};
+if (config.simulate) console.log('Simulation mode: jobs will not really run on a GPU.');
 let reconnectAttempts = 0;
 
 /** Connects to the backend and keeps reconnecting if the connection drops. */
@@ -25,7 +32,7 @@ function connect() {
 
   ws.on('open', async () => {
     reconnectAttempts = 0;
-    const gpus = await readGpuInfo();
+    const gpus = config.simulate ? [SIMULATED_GPU] : await readGpuInfo();
     send({ type: 'hello', name: config.name, gpus });
     console.log(`Connected to ${config.serverUrl} as "${config.name}"`);
     gpus.forEach((gpu) =>
@@ -36,7 +43,7 @@ function connect() {
   ws.on('message', (data) => {
     const message = JSON.parse(data.toString()) as ServerMessage;
     if (message.type === 'job') {
-      void runJob(message, send);
+      void handleJob(message, send);
     }
   });
 
@@ -63,44 +70,15 @@ function connect() {
   });
 }
 
-/** Downloads the binary of a job, runs it on the GPU and reports the result. */
-async function runJob(
-  job: Extract<ServerMessage, { type: 'job' }>,
-  send: (message: AgentMessage) => void,
-) {
+/** Runs a job and reports its result to the server. */
+async function handleJob(job: JobMessage, send: (message: AgentMessage) => void) {
   console.log(`Running job ${job.jobId} (limit ${job.timeoutSeconds} s)`);
-  const workDir = await mkdtemp(path.join(tmpdir(), 'gpugrid-agent-'));
-
-  try {
-    const response = await fetch(new URL(job.binaryPath, config.serverUrl), {
-      headers: { Authorization: `Bearer ${config.token}` },
-    });
-    if (!response.ok) throw new Error(`Binary download failed with HTTP ${response.status}`);
-    await writeFile(path.join(workDir, 'program'), Buffer.from(await response.arrayBuffer()), {
-      mode: 0o755,
-    });
-
-    const result = await runBinary({
-      binaryDir: workDir,
-      binaryName: 'program',
-      timeoutMs: job.timeoutSeconds * 1000,
-    });
-    send({ type: 'result', jobId: job.jobId, ...result });
+  const result = await runJob(job, deps);
+  send(result);
+  if (result.stderr.startsWith('Agent error:')) {
+    console.error(`Job ${job.jobId} failed in the agent: ${result.stderr}`);
+  } else {
     console.log(`Job ${job.jobId} finished: exit code ${result.exitCode}, ${result.durationMs} ms`);
-  } catch (err) {
-    const message = (err as Error).message;
-    console.error(`Job ${job.jobId} failed in the agent: ${message}`);
-    send({
-      type: 'result',
-      jobId: job.jobId,
-      exitCode: null,
-      stdout: '',
-      stderr: `Agent error: ${message}`,
-      durationMs: 0,
-      timedOut: false,
-    });
-  } finally {
-    await rm(workDir, { recursive: true, force: true });
   }
 }
 
