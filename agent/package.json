@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "run-local": "tsx src/run-local.ts",
-    "start": "tsx src/agent.ts"
+    "start": "tsx src/agent.ts",
+    "run-image": "tsx src/run-image.ts"
   },
   "keywords": [],
   "author": "",
