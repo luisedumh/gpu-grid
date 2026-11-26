@@ -24,7 +24,7 @@ describe.skipIf(!process.env.DOCKER_TESTS)('Docker compiler', () => {
   it('compiles a valid program into a binary', async () => {
     await prepare('__global__ void k() {}\nint main() { k<<<1, 1>>>(); return 0; }\n');
 
-    const result = await compile(workDir);
+    const result = await compile(workDir, ['main.cu']);
 
     expect(result.success).toBe(true);
     expect((await stat(path.join(workDir, 'program'))).isFile()).toBe(true);
@@ -33,7 +33,7 @@ describe.skipIf(!process.env.DOCKER_TESTS)('Docker compiler', () => {
   it('reports nvcc errors for an invalid program', async () => {
     await prepare('int main() { return undefined_variable; }\n');
 
-    const result = await compile(workDir);
+    const result = await compile(workDir, ['main.cu']);
 
     expect(result.success).toBe(false);
     expect(result.output).toMatch(/undefined_variable/);

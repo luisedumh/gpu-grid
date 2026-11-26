@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { loginSchema, registerSchema } from '../../src/schemas/auth.schema.js';
-import { createJobSchema, JOB_LIMITS, listJobsQuerySchema } from '../../src/schemas/jobs.schema.js';
+import {
+  cleanProjectPath,
+  createJobSchema,
+  JOB_LIMITS,
+  listJobsQuerySchema,
+} from '../../src/schemas/jobs.schema.js';
 
 describe('createJobSchema', () => {
   const job = { name: 'Vector addition', sourceCode: 'int main() {}' };
@@ -70,5 +75,29 @@ describe('loginSchema', () => {
     expect(loginSchema.safeParse({ email: 'ana@gpugrid.dev', password: 'x' }).success).toBe(true);
     expect(loginSchema.safeParse({ email: 'ana', password: 'x' }).success).toBe(false);
     expect(loginSchema.safeParse({ email: 'ana@gpugrid.dev', password: '' }).success).toBe(false);
+  });
+});
+
+describe('cleanProjectPath', () => {
+  it('accepts relative paths to source files and cleans Windows separators', () => {
+    expect(cleanProjectPath('main.cu')).toBe('main.cu');
+    expect(cleanProjectPath('src\\kernels.cu')).toBe('src/kernels.cu');
+    expect(cleanProjectPath('include/my_utils-v2.cuh')).toBe('include/my_utils-v2.cuh');
+  });
+
+  it('rejects anything that could be written outside the project or is not source code', () => {
+    for (const bad of [
+      '../x.cu',
+      '/abs.cu',
+      'a//b.cu',
+      './x.cu',
+      '.hidden.cu',
+      'x.exe',
+      'a b.cu',
+      'program/x.cu',
+      '',
+    ]) {
+      expect(cleanProjectPath(bad), bad).toBeNull();
+    }
   });
 });

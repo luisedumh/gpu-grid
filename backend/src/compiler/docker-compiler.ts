@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 /** File names used inside every job folder. */
-export const SOURCE_FILE = 'main.cu';
 export const BINARY_FILE = 'program';
 
 export interface CompileResult {
@@ -12,8 +11,11 @@ export interface CompileResult {
   timedOut: boolean;
 }
 
-/** Compiles the source file found in a job folder, leaving the binary next to it. */
-export type Compiler = (workDir: string) => Promise<CompileResult>;
+/**
+ * Compiles the .cu files of a job folder together (paths relative to the folder),
+ * leaving the binary next to them.
+ */
+export type Compiler = (workDir: string, sources: string[]) => Promise<CompileResult>;
 
 /**
  * Builds a fat binary: native code for Turing, Ampere, Ada, Hopper and Blackwell GPUs,
@@ -34,7 +36,7 @@ const MAX_OUTPUT_CHARS = 100_000;
  * limited memory, CPU and processes, and a time limit.
  */
 export function createDockerCompiler(options: { image: string; timeoutMs: number }): Compiler {
-  return (workDir) =>
+  return (workDir, sources) =>
     new Promise((resolve, reject) => {
       const containerName = `gpugrid-compile-${randomUUID()}`;
       const user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
@@ -65,7 +67,7 @@ export function createDockerCompiler(options: { image: string; timeoutMs: number
         '-O2',
         '-o',
         BINARY_FILE,
-        SOURCE_FILE,
+        ...sources,
         ...NVCC_ARCH_FLAGS,
       ];
 
