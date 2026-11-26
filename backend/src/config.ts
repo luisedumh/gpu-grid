@@ -5,6 +5,8 @@ export const config = {
   port: Number(process.env.PORT) || 3000,
   /** Where each job gets its own folder with the source code and the compiled binary. */
   jobsDir: path.resolve(process.env.JOBS_DIR ?? 'data/jobs'),
+  /** Where the Docker images uploaded as .tar are saved until their job finishes. */
+  uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? 'data/uploads'),
   /** Docker image that provides nvcc (built from compiler/Dockerfile). */
   compilerImage: process.env.COMPILER_IMAGE ?? 'gpugrid-compiler',
   /** Maximum time a single compilation may take. */

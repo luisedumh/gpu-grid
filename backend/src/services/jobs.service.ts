@@ -2,15 +2,24 @@ import type { SessionUser } from '../auth/session.js';
 import { prisma } from '../lib/prisma.js';
 import { NotFoundError } from '../lib/http-error.js';
 import { JobStatus } from '../generated/prisma/enums.js';
-import type { CreateJobInput, ListJobsQuery, ProjectFile } from '../schemas/jobs.schema.js';
+import type {
+  CreateJobInput,
+  DockerArchiveJobInput,
+  ListJobsQuery,
+  ProjectFile,
+} from '../schemas/jobs.schema.js';
 
 /**
  * Fields of a job that clients are allowed to see.
- * Internal details (such as where the binary is stored) stay private.
+ * Internal details (where the binary or the uploaded image are stored) stay private.
  */
 const publicJobFields = {
   id: true,
   name: true,
+  kind: true,
+  image: true,
+  imageArchiveName: true,
+  command: true,
   status: true,
   timeoutSeconds: true,
   compilerOutput: true,
@@ -29,6 +38,7 @@ const publicJobFields = {
 const jobSummaryFields = {
   id: true,
   name: true,
+  kind: true,
   status: true,
   exitCode: true,
   durationMs: true,
@@ -59,8 +69,22 @@ function mainFile(files: ProjectFile[]) {
   );
 }
 
-/** Stores a new job of the given client. It starts as PENDING, waiting to be compiled. */
+const createdJobFields = { id: true, status: true, createdAt: true } as const;
+
+/**
+ * Stores a new job of the given client.
+ * CUDA jobs start as PENDING, waiting to be compiled. Docker jobs have nothing
+ * to compile, so they go straight to QUEUED, waiting for a free GPU.
+ */
 export async function createJob(input: CreateJobInput, clientId: string) {
+  if (input.kind === 'DOCKER') {
+    const { image, command, ...rest } = input;
+    return prisma.job.create({
+      data: { ...rest, clientId, sourceCode: '', status: 'QUEUED', image, command },
+      select: createdJobFields,
+    });
+  }
+
   const { sourceCode, files, ...rest } = input;
   return prisma.job.create({
     data: {
@@ -69,7 +93,27 @@ export async function createJob(input: CreateJobInput, clientId: string) {
       sourceCode: sourceCode ?? mainFile(files!).content,
       ...(files ? { files } : {}),
     },
-    select: { id: true, status: true, createdAt: true },
+    select: createdJobFields,
+  });
+}
+
+/** Stores a Docker job whose image was uploaded as a .tar (already saved at archivePath). */
+export async function createArchiveJob(
+  input: DockerArchiveJobInput,
+  archive: { path: string; originalName: string },
+  clientId: string,
+) {
+  return prisma.job.create({
+    data: {
+      ...input,
+      kind: 'DOCKER',
+      clientId,
+      sourceCode: '',
+      status: 'QUEUED',
+      archivePath: archive.path,
+      imageArchiveName: archive.originalName,
+    },
+    select: createdJobFields,
   });
 }
 
@@ -83,9 +127,10 @@ export async function getJob(id: string, viewer: SessionUser) {
     select: { ...publicJobFields, sourceCode: true, files: true },
   });
   if (!job) throw new NotFoundError(`Job ${id} not found`);
-  // The code is returned as the list of files of the project, also for single-file jobs
+  // The code is returned as the list of files of the project, also for single-file jobs.
+  // Docker jobs have no code.
   const { sourceCode, files, ...rest } = job;
-  return { ...rest, files: jobFiles({ sourceCode, files }) };
+  return { ...rest, files: job.kind === 'DOCKER' ? [] : jobFiles({ sourceCode, files }) };
 }
 
 /**
