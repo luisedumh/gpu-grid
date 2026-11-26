@@ -36,6 +36,15 @@ export interface Job {
   updatedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  /** Files of the project (CUDA jobs). Old jobs of a single file have just one. */
+  files?: ProjectFile[];
+}
+
+/** One file of a CUDA project, as sent to and returned by the API. */
+export interface ProjectFile {
+  /** Relative path inside the project, e.g. "src/kernels.cu". */
+  path: string;
+  content: string;
 }
 
 /** Lighter version of a job returned by the list endpoint (no code or outputs). */
@@ -63,10 +72,15 @@ export const JOB_STATUSES: readonly JobStatus[] = [
   'TIMED_OUT',
 ];
 
+/**
+ * A new CUDA job: either a single file (sourceCode) or a project of several files.
+ * A project of one file is sent as sourceCode, as the API always accepted.
+ */
 export interface NewJob {
   name: string;
-  sourceCode: string;
   timeoutSeconds: number;
+  sourceCode?: string;
+  files?: ProjectFile[];
 }
 
 /** An error answered by the API, with the per-field details of validation errors. */
@@ -80,6 +94,14 @@ export class ApiError extends Error {
     this.status = status;
     this.details = details;
   }
+}
+
+/** Turns an error of the API into text for the user, listing the invalid fields if any. */
+export function describeError(err: unknown): string {
+  const details = err instanceof ApiError && err.details.length > 0 ? err.details : null;
+  return details
+    ? details.map((d) => `${d.field}: ${d.message}`).join('\n')
+    : (err as Error).message;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
