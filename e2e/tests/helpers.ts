@@ -38,19 +38,30 @@ export const VECTOR_ADD = readFileSync(
 /** The same program with a mistake: "x" is not declared anywhere. */
 export const BROKEN_PROGRAM = VECTOR_ADD.replace('a[i] + b[i]', 'a[i] + x');
 
+/** A unique job name, so each test finds its own job in the history. */
+export const jobName = (prefix: string) => `${prefix} ${Date.now()}`;
+
 /**
- * Sends a job from the New job page, uploading the code as a .cu file
- * (the same as pressing "Upload file"), and returns its unique name.
+ * Sends a job of a single file from the New job page and returns its unique name.
+ * The code is uploaded with "Upload files" as vector_add.cu: the page starts with
+ * the example of that name, so it is replaced and the project keeps one file
+ * (two files with a main() would not link).
  */
 export async function submitJob(page: Page, code: string, prefix = 'E2E job') {
-  const name = `${prefix} ${Date.now()}`;
+  const name = jobName(prefix);
   await page.goto('/jobs/new');
-  await page.locator('input[type=file]').setInputFiles({
-    name: 'program.cu',
+  await page.getByTestId('upload-files').setInputFiles({
+    name: 'vector_add.cu',
     mimeType: 'text/plain',
     buffer: Buffer.from(code),
   });
   await page.getByLabel('Job name').fill(name);
   await page.getByRole('button', { name: 'Run' }).click();
   return name;
+}
+
+/** Fills the job name and presses Run. */
+export async function run(page: Page, name: string) {
+  await page.getByLabel('Job name').fill(name);
+  await page.getByRole('button', { name: 'Run' }).click();
 }
