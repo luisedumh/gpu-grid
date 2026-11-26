@@ -1,13 +1,22 @@
-import { Code2, Play } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
-import { FINAL_STATUSES, createJob, describeError } from '../api/jobs.ts';
+import { Box, Code2, Play } from 'lucide-react';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import {
+  FINAL_STATUSES,
+  createDockerJob,
+  createJob,
+  describeError,
+  uploadDockerArchive,
+  type JobKind,
+} from '../api/jobs.ts';
 import { CodeEditor } from '../components/CodeEditor.tsx';
+import { DockerJobForm, type DockerSource } from '../components/DockerJobForm.tsx';
 import { EditorTabs } from '../components/EditorTabs.tsx';
 import { FileExplorer } from '../components/FileExplorer.tsx';
 import { JobConsole } from '../components/JobConsole.tsx';
 import { PageHeader } from '../components/PageHeader.tsx';
 import { VECTOR_ADD_EXAMPLE } from '../examples/vector-add.ts';
 import { useJob } from '../hooks/useJob.ts';
+import { isValidImageReference } from '../lib/docker.ts';
 import {
   checkProject,
   deletePath,
@@ -26,6 +35,15 @@ const TIMEOUT_OPTIONS = [10, 30, 60, 120, 300];
 const FIRST_FILE = 'vector_add.cu';
 
 export function NewJobPage() {
+  const [kind, setKind] = useState<JobKind>('CUDA');
+
+  // Docker image job
+  const [dockerSource, setDockerSource] = useState<DockerSource>('registry');
+  const [image, setImage] = useState('');
+  const [archive, setArchive] = useState<File | null>(null);
+  const [command, setCommand] = useState('');
+  const [progress, setProgress] = useState<number | null>(null);
+
   const [files, setFiles] = useState<ProjectFiles>({ [FIRST_FILE]: VECTOR_ADD_EXAMPLE });
   const [tabs, setTabs] = useState<string[]>([FIRST_FILE]);
   const [active, setActive] = useState<string | null>(FIRST_FILE);
@@ -139,68 +157,125 @@ export function NewJobPage() {
 
   // ----- Run -----
 
+  /** Checks what is about to be sent; returns the problem to show, or null. */
+  function validate(): string | null {
+    if (kind === 'CUDA') return checkProject(files);
+    if (dockerSource === 'registry') {
+      return isValidImageReference(image) ? null : 'Write a valid image name, e.g. ubuntu:24.04';
+    }
+    return archive ? null : 'Choose the .tar of the image';
+  }
+
+  /** Sends the job in the way each kind needs. */
+  function send() {
+    const cmd = command.trim() || undefined;
+    if (kind === 'CUDA') return createJob(projectPayload(name, timeoutSeconds, files));
+    if (dockerSource === 'registry') {
+      return createDockerJob({ name, timeoutSeconds, image: image.trim(), command: cmd });
+    }
+    setProgress(0);
+    return uploadDockerArchive(
+      { name, timeoutSeconds, command: cmd, archive: archive! },
+      setProgress,
+    );
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setSubmitError(null);
-    const problem = checkProject(files);
+    const problem = validate();
     if (problem) {
       setSubmitError(problem);
       return;
     }
     setSubmitting(true);
     try {
-      const created = await createJob(projectPayload(name, timeoutSeconds, files));
+      const created = await send();
       setJobId(created.id);
     } catch (err) {
       setSubmitError(describeError(err));
     } finally {
       setSubmitting(false);
+      setProgress(null);
     }
   }
 
   return (
     <>
-      <PageHeader
-        title="New job"
-        subtitle="Write or upload your CUDA project and run it on a GPU"
-      />
+      <PageHeader title="New job" subtitle="Run a CUDA project or a Docker image on a GPU" />
 
       <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 gap-5 p-6">
         {/* Left: explorer + editor, and the console */}
         <div className="flex min-w-0 flex-1 flex-col gap-4">
-          <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-[#1e1e1e]">
-            <FileExplorer
-              paths={paths}
-              activePath={active}
-              onOpen={open}
-              onCreate={createFile}
-              onRename={rename}
-              onDelete={remove}
-              onUploadFiles={uploadFiles}
-              onUploadZip={uploadZip}
+          <div
+            role="tablist"
+            aria-label="Kind of job"
+            className="flex gap-1 self-start rounded-xl bg-slate-200/70 p-1"
+          >
+            <KindTab
+              selected={kind === 'CUDA'}
+              onSelect={() => setKind('CUDA')}
+              icon={<Code2 className="size-4" />}
+              label="CUDA project"
               disabled={busy}
             />
-            <div className="flex min-w-0 flex-1 flex-col">
-              <EditorTabs tabs={tabs} active={active} onSelect={setActive} onClose={closeTab} />
-              <div className="min-h-0 flex-1">
-                {active ? (
-                  <CodeEditor
-                    path={active}
-                    language={languageFor(active)}
-                    value={files[active] ?? ''}
-                    onChange={(value) => setFiles((prev) => ({ ...prev, [active]: value }))}
-                  />
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-500">
-                    <Code2 className="size-8" />
-                    Open a file from the explorer
-                  </div>
-                )}
-              </div>
-            </div>
+            <KindTab
+              selected={kind === 'DOCKER'}
+              onSelect={() => setKind('DOCKER')}
+              icon={<Box className="size-4" />}
+              label="Docker image"
+              disabled={busy}
+            />
           </div>
 
-          {notice && (
+          {kind === 'DOCKER' ? (
+            <DockerJobForm
+              source={dockerSource}
+              onSourceChange={setDockerSource}
+              image={image}
+              onImageChange={setImage}
+              archive={archive}
+              onArchiveChange={setArchive}
+              command={command}
+              onCommandChange={setCommand}
+              progress={progress}
+              disabled={busy}
+            />
+          ) : (
+            <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-[#1e1e1e]">
+              <FileExplorer
+                paths={paths}
+                activePath={active}
+                onOpen={open}
+                onCreate={createFile}
+                onRename={rename}
+                onDelete={remove}
+                onUploadFiles={uploadFiles}
+                onUploadZip={uploadZip}
+                disabled={busy}
+              />
+              <div className="flex min-w-0 flex-1 flex-col">
+                <EditorTabs tabs={tabs} active={active} onSelect={setActive} onClose={closeTab} />
+                <div className="min-h-0 flex-1">
+                  {active ? (
+                    <CodeEditor
+                      path={active}
+                      language={languageFor(active)}
+                      value={files[active] ?? ''}
+                      onChange={(value) => setFiles((prev) => ({ ...prev, [active]: value }))}
+                    />
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-slate-500">
+                      <Code2 className="size-8" />
+                      Open a file from the explorer
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {kind === 'CUDA' && notice && (
             <p role="status" className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {notice}
             </p>
@@ -247,7 +322,7 @@ export function NewJobPage() {
 
           <button
             type="submit"
-            disabled={busy || paths.length === 0}
+            disabled={busy || (kind === 'CUDA' && paths.length === 0)}
             className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-500 font-semibold text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Play className="size-4" />
@@ -255,12 +330,49 @@ export function NewJobPage() {
           </button>
 
           <p className="text-xs leading-relaxed text-slate-500">
-            Every <span className="font-mono">.cu</span> file of the project is compiled together
-            with <span className="font-mono">nvcc</span> and the program runs on a provider&apos;s
-            NVIDIA GPU. Whatever it prints appears in the console.
+            {kind === 'CUDA' ? (
+              <>
+                Every <span className="font-mono">.cu</span> file of the project is compiled
+                together with <span className="font-mono">nvcc</span> and the program runs on a
+                provider&apos;s NVIDIA GPU.
+              </>
+            ) : (
+              <>The image runs on a provider&apos;s NVIDIA GPU, with no need to compile anything.</>
+            )}{' '}
+            Whatever it prints appears in the console.
           </p>
         </aside>
       </form>
     </>
+  );
+}
+
+function KindTab({
+  selected,
+  onSelect,
+  icon,
+  label,
+  disabled,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  icon: ReactNode;
+  label: string;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onSelect}
+      disabled={disabled}
+      className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm font-medium ${
+        selected ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }

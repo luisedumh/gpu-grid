@@ -60,6 +60,19 @@ export function JobDetail({ jobId }: { jobId: string }) {
           <Info label="Attempts" value={job.attempts} />
         </dl>
 
+        {job.kind === 'DOCKER' && (
+          <dl className="space-y-2">
+            <Info
+              label="Docker image"
+              value={<Mono>{job.image ?? `${job.imageArchiveName} (uploaded)`}</Mono>}
+            />
+            <Info
+              label="Command"
+              value={<Mono>{job.command ?? 'Default command of the image'}</Mono>}
+            />
+          </dl>
+        )}
+
         {job.files && job.files.length > 0 && <JobFiles files={job.files} />}
 
         {job.compilerOutput && (
@@ -154,4 +167,8 @@ function JobFiles({ files }: { files: ProjectFile[] }) {
       </ul>
     </section>
   );
+}
+
+function Mono({ children }: { children: ReactNode }) {
+  return <span className="font-mono text-xs break-all">{children}</span>;
 }

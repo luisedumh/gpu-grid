@@ -21,8 +21,18 @@ export const FINAL_STATUSES: readonly JobStatus[] = [
   'TIMED_OUT',
 ];
 
+/** A CUDA project compiled by the platform, or a Docker image provided by the client. */
+export type JobKind = 'CUDA' | 'DOCKER';
+
 export interface Job {
   id: string;
+  kind?: JobKind;
+  /** Docker jobs: image to run, given by name (null if it was uploaded as a .tar). */
+  image?: string | null;
+  /** Docker jobs: name of the uploaded .tar (null if the image was given by name). */
+  imageArchiveName?: string | null;
+  /** Docker jobs: command run inside the container (null: the image's default one). */
+  command?: string | null;
   name: string;
   status: JobStatus;
   timeoutSeconds: number;
@@ -83,6 +93,22 @@ export interface NewJob {
   files?: ProjectFile[];
 }
 
+/** A Docker job from an image published in a registry (Docker Hub, GHCR...). */
+export interface NewDockerJob {
+  name: string;
+  timeoutSeconds: number;
+  image: string;
+  command?: string;
+}
+
+/** A Docker job from a .tar created with "docker save". */
+export interface NewDockerArchiveJob {
+  name: string;
+  timeoutSeconds: number;
+  command?: string;
+  archive: File;
+}
+
 /** An error answered by the API, with the per-field details of validation errors. */
 export class ApiError extends Error {
   readonly status: number;
@@ -129,4 +155,48 @@ export function createJob(job: NewJob) {
 
 export function getJob(id: string) {
   return request<Job>(`/api/jobs/${id}`);
+}
+
+export function createDockerJob(job: NewDockerJob) {
+  return request<Pick<Job, 'id' | 'status' | 'createdAt'>>('/api/jobs', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'DOCKER', ...job }),
+  });
+}
+
+/**
+ * Uploads the .tar of an image as multipart/form-data.
+ * It uses XMLHttpRequest instead of fetch because fetch cannot report upload progress.
+ * onProgress receives a number between 0 and 1.
+ */
+export function uploadDockerArchive(
+  job: NewDockerArchiveJob,
+  onProgress: (fraction: number) => void,
+): Promise<Pick<Job, 'id' | 'status' | 'createdAt'>> {
+  const form = new FormData();
+  form.append('name', job.name);
+  form.append('timeoutSeconds', String(job.timeoutSeconds));
+  if (job.command) form.append('command', job.command);
+  // The file goes last, so the server already has the other fields when it starts receiving it
+  form.append('archive', job.archive);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/jobs/docker-archive');
+    xhr.responseType = 'json';
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      const body = xhr.response;
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else {
+        reject(
+          new ApiError(body?.error ?? `Upload failed (${xhr.status})`, xhr.status, body?.details),
+        );
+      }
+    };
+    xhr.onerror = () => reject(new ApiError('Upload failed: no connection to the server', 0));
+    xhr.send(form);
+  });
 }
